@@ -115,9 +115,19 @@ def login():
 # -----------------------Set up private API and Avoid re-login----------------------
 
 
+# -----------------------get settings file--------------------
+def get_api():
+    if not os.path.isfile(settings_file):
+        raise Exception("You must log in first!")
+    with open(settings_file) as file_data:
+        cached_settings = json.load(file_data, object_hook=from_json)
+    return Client(settings=cached_settings)
+
+
 # -----------------------Fetch Data Methods-------------------
 def get_own_number_of_followers():
     try:
+        api = get_api()
         user_info = api.current_user()
         number_of_followers = user_info['user']['follower_count']
         return number_of_followers
@@ -128,6 +138,7 @@ def get_own_number_of_followers():
 
 def get_number_of_followers(target_username):
     try:
+        api = get_api()
         user_info = api.username_info(target_username)
         number_of_followers = user_info['user']['follower_count']
         return number_of_followers
@@ -138,6 +149,7 @@ def get_number_of_followers(target_username):
 
 def get_own_number_of_following():
     try:
+        api = get_api()
         user_info = api.current_user()
         number_of_followers = user_info['user']['follower_count']
         return number_of_followers
@@ -148,6 +160,7 @@ def get_own_number_of_following():
 
 def get_number_of_following(target_username):
     try:
+        api = get_api()
         user_info = api.username_info(target_username)
         number_of_followers = user_info['user']['follower_count']
         return number_of_followers
@@ -158,6 +171,7 @@ def get_number_of_following(target_username):
 
 def get_own_followers():
     try:
+        api = get_api()
         user_info = api.current_user()
         user_id = user_info['user']['pk']
         rank_token = str(uuid.uuid4())
@@ -170,6 +184,7 @@ def get_own_followers():
 
 def get_followers(target_username):
     try:
+        api = get_api()
         user_info = api.username_info(target_username)
         user_id = user_info['user']['pk']
         rank_token = str(uuid.uuid4())
@@ -182,6 +197,7 @@ def get_followers(target_username):
 
 def get_own_bio_text():
     try:
+        api = get_api()
         user_info = api.current_user()
         bio = user_info.get('user', {}).get('biography', '')
         return bio
@@ -192,6 +208,7 @@ def get_own_bio_text():
 
 def get_instagram_bio(target_username):
     try:
+        api = get_api()
         user_info = api.username_info(target_username)
         bio = user_info.get('user', {}).get('biography', '')
         return bio
@@ -202,6 +219,7 @@ def get_instagram_bio(target_username):
 
 def get_own_post_count():
     try:
+        api = get_api()
         user_info = api.current_user()
         post_count = user_info.get('user', {}).get('media_count', 0)
         return post_count
@@ -212,6 +230,7 @@ def get_own_post_count():
 
 def get_own_profile_pic_url():
     try:
+        api = get_api()
         user_info = api.current_user()
         profile_pic_url = user_info.get('user', {}).get('hd_profile_pic_url_info', {}).get('url', '')
         return profile_pic_url
@@ -222,6 +241,7 @@ def get_own_profile_pic_url():
 
 def get_profile_pic_url_of_user(target_username):
     try:
+        api = get_api()
         user_info = api.username_info(target_username)
         profile_pic_url = user_info.get('user', {}).get('hd_profile_pic_url_info', {}).get('url', '')
         return profile_pic_url
@@ -232,6 +252,7 @@ def get_profile_pic_url_of_user(target_username):
 
 def get_full_name_of_user(target_username):
     try:
+        api = get_api()
         user_info = api.username_info(target_username)
         full_name = user_info.get('user', {}).get('full_name', '')
         return full_name
@@ -242,6 +263,7 @@ def get_full_name_of_user(target_username):
 
 def is_user_verified(target_username):
     try:
+        api = get_api()
         user_info = api.username_info(target_username)
         return user_info.get('user', {}).get('is_verified', False)
     except Exception as e:
@@ -251,6 +273,7 @@ def is_user_verified(target_username):
 
 def is_user_private(target_username):
     try:
+        api = get_api()
         user_info = api.username_info(target_username)
         return user_info.get('user', {}).get('is_private', False)
     except Exception as e:
