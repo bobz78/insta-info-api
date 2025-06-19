@@ -9,6 +9,7 @@ from instagram_private_api import (
     Client, ClientError, ClientLoginError,
     ClientCookieExpiredError, ClientLoginRequiredError, ClientCompatPatch)
 
+
 app = Flask(__name__)
 
 
@@ -35,79 +36,51 @@ def on_login_callback(api, new_settings_file):
         print('SAVED: {0!s}'.format(new_settings_file))
 
 
-api: Client
+SESSION_FOLDER = "sessions"  # folder to store session files
+
+if not os.path.exists(SESSION_FOLDER):
+    os.makedirs(SESSION_FOLDER)
+
+api: Client = None
 settings_file = "settings.json"
 
 
 @app.route("/login", methods=["POST"])
 def login():
-    global api
-    global settings_file
-
     data = request.json
     username = data.get("username", "")
     password = data.get("password", "")
 
+    if not username or not password:
+        return jsonify({"status": "error", "message": "Username and password required"}), 400
+
+    # generate token
+    token = str(uuid.uuid4())
+    settings_file = os.path.join(SESSION_FOLDER, f"settings_{token}.json")
+
     device_id = None
 
     try:
-        if not os.path.isfile(settings_file):
-            print(f"Settings file not found. Logging in as {username}...")
-            api = Client(
-                username,
-                password,
-                on_login=lambda x: on_login_callback(x, settings_file)
-            )
-        else:
-            with open(settings_file) as file_data:
-                cached_settings = json.load(file_data, object_hook=from_json)
-
-            print(f"Using cached settings from {settings_file}")
-            device_id = cached_settings.get('device_id')
-
-            api = Client(
-                username,
-                password,
-                settings=cached_settings
-            )
-    except (ClientCookieExpiredError, ClientLoginRequiredError) as e:
-        print(f"Session expired. Re-logging in... ({e})")
         api = Client(
             username,
             password,
-            device_id=device_id,
             on_login=lambda x: on_login_callback(x, settings_file)
         )
-    except ClientLoginError as e:
-        print(f"Login error: {e}")
+    except (ClientLoginError, ClientCookieExpiredError, ClientLoginRequiredError) as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     except ClientError as e:
-        print(f"Client error: {e.msg} (Code: {e.code}, Response: {e.error_response})")
         return jsonify({"status": "error", "message": e.msg}), 400
     except Exception as e:
-        print(f"Unexpected error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-    # Success
+    # success
     cookie_expiry = api.cookie_jar.auth_expires
     expiry_str = datetime.fromtimestamp(cookie_expiry).strftime('%Y-%m-%dT%H:%M:%SZ')
-    print('Cookie Expiry:', expiry_str)
-
-    # Example feed fetch after login
-    try:
-        results = api.feed_timeline()
-        items = [item for item in results.get('feed_items', []) if item.get('media_or_ad')]
-        codes = []
-        for item in items:
-            ClientCompatPatch.media(item['media_or_ad'])
-            codes.append(item['media_or_ad']['code'])
-        print("Recent post codes:", codes)
-    except Exception as e:
-        print(f"Failed to fetch timeline: {e}")
 
     return jsonify({
         "status": "success",
         "message": f"Logged in as {username}",
+        "token": token,
         "cookie_expiry": expiry_str
     })
 
@@ -115,277 +88,408 @@ def login():
 # -----------------------Set up private API and Avoid re-login----------------------
 
 
-# -----------------------get settings file--------------------
-def get_api():
-    global api
-    if api is not None:
-        return api
-
+# -----------------------UTILITY: Get API from token-----------------------
+def get_api_from_token(token):
+    settings_file = os.path.join(SESSION_FOLDER, f"settings_{token}.json")
     if not os.path.isfile(settings_file):
-        raise Exception("You must log in first!")
+        raise Exception("Invalid or expired token")
 
     with open(settings_file) as file_data:
         cached_settings = json.load(file_data, object_hook=from_json)
 
-    print(f"Loading session from {settings_file}")
+    # username = cached_settings.get('username_id')  # optional log
+    # device_id = cached_settings.get('device_id')
 
-    username = cached_settings.get("username") or "dummy_username"
-    dummy_password = "dummy_password"
-
-    try:
-        api = Client(
-            username,
-            dummy_password,
-            settings=cached_settings
-        )
-    except ClientError as e:
-        print(f"Failed to create Client from cached settings: {e}")
-        raise Exception("Invalid session. Please log in again.")
-
+    api = Client(
+        None, None,  # username/password not needed
+        settings=cached_settings
+    )
     return api
 
 
 # -----------------------Fetch Data Methods-------------------
-def get_own_number_of_followers():
-    try:
-        api = get_api()
-        user_info = api.current_user()
-        number_of_followers = user_info['user']['follower_count']
-        return number_of_followers
-    except Exception as e:
-        print(f"Error: {e}")
-        return 0
-
-
-def get_number_of_followers(target_username):
-    try:
-        api = get_api()
-        user_info = api.username_info(target_username)
-        number_of_followers = user_info['user']['follower_count']
-        return number_of_followers
-    except Exception as e:
-        print(f"Error: {e}")
-        return 0
-
-
-def get_own_number_of_following():
-    try:
-        api = get_api()
-        user_info = api.current_user()
-        number_of_followers = user_info['user']['follower_count']
-        return number_of_followers
-    except Exception as e:
-        print(f"Error: {e}")
-        return 0
-
-
-def get_number_of_following(target_username):
-    try:
-        api = get_api()
-        user_info = api.username_info(target_username)
-        number_of_followers = user_info['user']['follower_count']
-        return number_of_followers
-    except Exception as e:
-        print(f"Error: {e}")
-        return 0
-
-
-def get_own_followers():
-    try:
-        api = get_api()
-        user_info = api.current_user()
-        user_id = user_info['user']['pk']
-        rank_token = str(uuid.uuid4())
-        followers = api.user_followers(user_id, rank_token=rank_token)
-        return followers
-    except Exception as e:
-        print(f"Error: {e}")
-        return {}
-
-
-def get_followers(target_username):
-    try:
-        api = get_api()
-        user_info = api.username_info(target_username)
-        user_id = user_info['user']['pk']
-        rank_token = str(uuid.uuid4())
-        followers = api.user_followers(user_id, rank_token=rank_token)
-        return followers
-    except Exception as e:
-        print(f"Error: {e}")
-        return {}
-
-
-def get_own_bio_text():
-    try:
-        api = get_api()
-        user_info = api.current_user()
-        bio = user_info.get('user', {}).get('biography', '')
-        return bio
-    except Exception as e:
-        print(f"Error: {e}")
-        return ''
-
-
-def get_instagram_bio(target_username):
-    try:
-        api = get_api()
-        user_info = api.username_info(target_username)
-        bio = user_info.get('user', {}).get('biography', '')
-        return bio
-    except Exception as e:
-        print(f"Error: {e}")
-        return ''
-
-
-def get_own_post_count():
-    try:
-        api = get_api()
-        user_info = api.current_user()
-        post_count = user_info.get('user', {}).get('media_count', 0)
-        return post_count
-    except Exception as e:
-        print(f"Error: {e}")
-        return 0
-
-
-def get_own_profile_pic_url():
-    try:
-        api = get_api()
-        user_info = api.current_user()
-        profile_pic_url = user_info.get('user', {}).get('hd_profile_pic_url_info', {}).get('url', '')
-        return profile_pic_url
-    except Exception as e:
-        print(f"Error: {e}")
-        return ''
-
-
-def get_profile_pic_url_of_user(target_username):
-    try:
-        api = get_api()
-        user_info = api.username_info(target_username)
-        profile_pic_url = user_info.get('user', {}).get('hd_profile_pic_url_info', {}).get('url', '')
-        return profile_pic_url
-    except Exception as e:
-        print(f"Error: {e}")
-        return ''
-
-
-def get_full_name_of_user(target_username):
-    try:
-        api = get_api()
-        user_info = api.username_info(target_username)
-        full_name = user_info.get('user', {}).get('full_name', '')
-        return full_name
-    except Exception as e:
-        print(f"Error: {e}")
-        return ''
-
-
-def is_user_verified(target_username):
-    try:
-        api = get_api()
-        user_info = api.username_info(target_username)
-        return user_info.get('user', {}).get('is_verified', False)
-    except Exception as e:
-        print(f"Error: {e}")
-        return False
-
-
-def is_user_private(target_username):
-    try:
-        api = get_api()
-        user_info = api.username_info(target_username)
-        return user_info.get('user', {}).get('is_private', False)
-    except Exception as e:
-        print(f"Error: {e}")
-        return False
-
-
 @app.route("/get_own_number_of_followers", methods=["POST"])
-def route_get_own_number_of_followers():
-    return jsonify(get_own_number_of_followers())
+def get_own_number_of_followers():
+    data = request.json
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+
+    try:
+        api = get_api_from_token(token)
+        user_info = api.current_user()
+        number_of_followers = user_info['user']['follower_count']
+        return jsonify({
+            "status": "success",
+            "follower_count": number_of_followers
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/get_number_of_followers", methods=["POST"])
-def route_get_number_of_followers():
+def get_number_of_followers():
     data = request.json
+    token = data.get("token", "")
     target_username = data.get("target_username", "")
-    return jsonify(get_number_of_followers(target_username))
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+
+    try:
+        api = get_api_from_token(token)
+        user_info = api.username_info(target_username)
+        number_of_followers = user_info['user']['follower_count']
+        return jsonify({
+            "status": "success",
+            "follower_count": number_of_followers
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/get_own_number_of_following", methods=["POST"])
-def route_get_own_number_of_following():
-    return jsonify(get_own_number_of_following())
+def get_own_number_of_following():
+    data = request.json
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+
+    try:
+        api = get_api_from_token(token)
+        user_info = api.current_user()
+        number_of_following = user_info['user']['following_count']
+        return jsonify({
+            "status": "success",
+            "following_count": number_of_following
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/get_number_of_following", methods=["POST"])
-def route_get_number_of_following():
+def get_number_of_following():
     data = request.json
+    token = data.get("token", "")
     target_username = data.get("target_username", "")
-    return jsonify(get_number_of_following(target_username))
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+
+    try:
+        api = get_api_from_token(token)
+        user_info = api.username_info(target_username)
+        number_of_following = user_info['user']['following_count']
+        return jsonify({
+            "status": "success",
+            "following_count": number_of_following
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/get_own_followers", methods=["POST"])
-def route_get_own_followers():
-    return jsonify(get_own_followers())
+def get_own_followers():
+    data = request.json
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+
+    try:
+        api = get_api_from_token(token)
+        followers = []
+        results = api.followers(api.authenticated_user_id)
+        for user in results.get('users', []):
+            followers.append(user['username'])
+        return jsonify({
+            "status": "success",
+            "followers": followers
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/get_followers", methods=["POST"])
-def route_get_followers():
+def get_followers():
     data = request.json
+    token = data.get("token", "")
     target_username = data.get("target_username", "")
-    return jsonify(get_followers(target_username))
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+
+    try:
+        api = get_api_from_token(token)
+        target_user = api.username_info(target_username)
+        target_user_id = target_user['user']['pk']
+
+        followers = []
+        results = api.followers(target_user_id)
+        for user in results.get('users', []):
+            followers.append(user['username'])
+
+        return jsonify({
+            "status": "success",
+            "followers": followers
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/get_own_bio_text", methods=["POST"])
-def route_get_own_bio_text():
-    return jsonify(get_own_bio_text())
-
-
-@app.route("/get_instagram_bio", methods=["POST"])
-def route_get_instagram_bio():
+@app.route("/get_own_bio", methods=["POST"])
+def get_own_bio():
     data = request.json
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+
+    try:
+        api = get_api_from_token(token)
+        user_info = api.current_user()
+        bio = user_info['user']['biography']
+        return jsonify({
+            "status": "success",
+            "bio": bio
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/get_bio", methods=["POST"])
+def get_bio():
+    data = request.json
+    token = data.get("token", "")
     target_username = data.get("target_username", "")
-    return jsonify(get_instagram_bio(target_username))
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.username_info(target_username)
+        bio = user_info['user']['biography']
+        return jsonify({
+            "status": "success",
+            "bio": bio
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/get_own_post_count", methods=["POST"])
-def route_get_own_post_count():
-    return jsonify(get_own_post_count())
+def get_own_post_count():
+    data = request.json
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.current_user()
+        post_count = user_info['user']['media_count']
+        return jsonify({
+            "status": "success",
+            "post_count": post_count
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/get_post_count", methods=["POST"])
+def get_post_count():
+    data = request.json
+    token = data.get("token", "")
+    target_username = data.get("target_username", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.username_info(target_username)
+        post_count = user_info['user']['media_count']
+        return jsonify({
+            "status": "success",
+            "post_count": post_count
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/get_own_profile_pic_url", methods=["POST"])
-def route_get_own_profile_pic_url():
-    return jsonify(get_own_profile_pic_url())
-
-
-@app.route("/get_profile_pic_url_of_user", methods=["POST"])
-def route_get_profile_pic_url_of_user():
+def get_own_profile_pic_url():
     data = request.json
-    target_username = data.get("target_username", "")
-    return jsonify(get_profile_pic_url_of_user(target_username))
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.current_user()
+        profile_pic_url = user_info['user']['profile_pic_url']
+        return jsonify({
+            "status": "success",
+            "profile_pic_url": profile_pic_url
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/get_full_name_of_user", methods=["POST"])
-def route_get_full_name_of_user():
+@app.route("/get_profile_pic_url", methods=["POST"])
+def get_profile_pic_url():
     data = request.json
+    token = data.get("token", "")
     target_username = data.get("target_username", "")
-    return jsonify(get_full_name_of_user(target_username))
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.username_info(target_username)
+        profile_pic_url = user_info['user']['profile_pic_url']
+        return jsonify({
+            "status": "success",
+            "profile_pic_url": profile_pic_url
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/is_user_verified", methods=["POST"])
-def route_is_user_verified():
+@app.route("/get_own_verified", methods=["POST"])
+def get_own_verified():
     data = request.json
-    target_username = data.get("target_username", "")
-    return jsonify(is_user_verified(target_username))
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.current_user()
+        verified = user_info['user']['is_verified']
+        return jsonify({
+            "status": "success",
+            "verified": verified
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/is_user_private", methods=["POST"])
-def route_is_user_private():
+@app.route("/get_verified", methods=["POST"])
+def get_verified():
     data = request.json
+    token = data.get("token", "")
     target_username = data.get("target_username", "")
-    return jsonify(is_user_private(target_username))
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.username_info(target_username)
+        verified = user_info['user']['is_verified']
+        return jsonify({
+            "status": "success",
+            "verified": verified
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/get_own_private", methods=["POST"])
+def get_own_private():
+    data = request.json
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.current_user()
+        private = user_info['user']['is_private']
+        return jsonify({
+            "status": "success",
+            "private": private
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/get_private", methods=["POST"])
+def get_private():
+    data = request.json
+    token = data.get("token", "")
+    target_username = data.get("target_username", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.username_info(target_username)
+        private = user_info['user']['is_private']
+        return jsonify({
+            "status": "success",
+            "private": private
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/get_own_full_name", methods=["POST"])
+def get_own_full_name():
+    data = request.json
+    token = data.get("token", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.current_user()
+        full_name = user_info['user']['full_name']
+        return jsonify({
+            "status": "success",
+            "full_name": full_name
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/get_full_name", methods=["POST"])
+def get_full_name():
+    data = request.json
+    token = data.get("token", "")
+    target_username = data.get("target_username", "")
+
+    if not token:
+        return jsonify({"status": "error", "message": "Token required"}), 400
+    try:
+        api = get_api_from_token(token)
+        user_info = api.username_info(target_username)
+        full_name = user_info['user']['full_name']
+        return jsonify({
+            "status": "success",
+            "full_name": full_name
+        })
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # -----------------------Fetch Data Methods-------------------
