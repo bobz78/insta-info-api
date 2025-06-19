@@ -117,11 +117,32 @@ def login():
 
 # -----------------------get settings file--------------------
 def get_api():
+    global api
+    if api is not None:
+        return api
+
     if not os.path.isfile(settings_file):
         raise Exception("You must log in first!")
+
     with open(settings_file) as file_data:
         cached_settings = json.load(file_data, object_hook=from_json)
-    return Client(settings=cached_settings)
+
+    print(f"Loading session from {settings_file}")
+
+    username = cached_settings.get("username") or "dummy_username"
+    dummy_password = "dummy_password"
+
+    try:
+        api = Client(
+            username,
+            dummy_password,
+            settings=cached_settings
+        )
+    except ClientError as e:
+        print(f"Failed to create Client from cached settings: {e}")
+        raise Exception("Invalid session. Please log in again.")
+
+    return api
 
 
 # -----------------------Fetch Data Methods-------------------
